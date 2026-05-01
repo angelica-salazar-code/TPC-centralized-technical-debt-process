@@ -22,6 +22,7 @@ const SBU_CSS: Record<SBU, string> = {
   MSS: "var(--sbu-mss)",
   SCIM: "var(--sbu-scim)",
   "A&I": "var(--sbu-ai)",
+  ACT: "var(--sbu-act)",
   TPC: "var(--sbu-tpc)",
 };
 
