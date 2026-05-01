@@ -29,8 +29,8 @@ function loadTheme(variant: Variant): Theme {
 
 export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [variant, setVariantState] = useState<Variant>(() => {
-    if (typeof window === "undefined") return "signal";
-    return (localStorage.getItem("variant") as Variant) || "signal";
+    if (typeof window === "undefined") return "council";
+    return (localStorage.getItem("variant") as Variant) || "council";
   });
   const [role, setRoleState] = useState<Role>(() => {
     if (typeof window === "undefined") return "reviewer";

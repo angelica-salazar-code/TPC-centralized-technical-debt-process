@@ -165,7 +165,7 @@ function CouncilReview() {
   // that the reviewer can still re-rank or revisit; deferred & handed-off items are excluded.
   const eligible = useMemo(() => {
     return (data ?? []).filter(
-      (r) => r.status === "scored" || r.status === "submitted" || r.status === "in_review" || r.status === "approved"
+      (r) => r.status === "scored" || r.status === "submitted" || r.status === "in_review" || r.status === "approved" || r.status === "handed_off"
     );
   }, [data]);
 
@@ -198,7 +198,13 @@ function CouncilReview() {
     const below: RequestWithScore[] = [];
     let acc = handedOffDays;
     let cutClosed = false;
-    for (const r of sorted) {
+
+    // Handed-off items always go above the cut line
+    const handedOff = sorted.filter((r) => r.status === "handed_off");
+    const rest = sorted.filter((r) => r.status !== "handed_off");
+    above.push(...handedOff);
+    // Their days are already counted via handedOffDays, so proceed with the rest
+    for (const r of rest) {
       if (isDemoted(r)) { demoted.push(r); continue; }
       const d = r.estimated_days ?? 0;
       if (!cutClosed && acc + d <= CAPACITY_DAYS_BUDGET) {
@@ -260,8 +266,8 @@ function CouncilReview() {
       if (!current) return;
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      if (e.key === "ArrowRight") handleApprove();
-      if (e.key === "ArrowLeft") handleDefer();
+      if (e.key === "ArrowRight" && current.status !== "handed_off") handleApprove();
+      if (e.key === "ArrowLeft" && current.status !== "handed_off") handleDefer();
       if (e.key === "ArrowDown") setIdx((i) => Math.min(i + 1, ranked.length - 1));
       if (e.key === "ArrowUp") setIdx((i) => Math.max(i - 1, 0));
     };
@@ -662,8 +668,14 @@ function CouncilReview() {
         <div className="mt-6 flex items-center justify-between">
           <button onClick={() => setIdx((i) => Math.max(i - 1, 0))} className="text-sm text-[hsl(var(--council-text-dim))] hover:text-[hsl(var(--council-text))]"><ChevronLeft className="inline h-4 w-4" /> Previous</button>
           <div className="flex gap-2">
-            <button onClick={handleDefer} className="inline-flex items-center gap-2 rounded-sm border border-[hsl(var(--council-line))] px-4 py-2 text-sm tracking-wider uppercase text-[hsl(var(--council-text))] hover:bg-white/5"><X className="h-4 w-4" /> Defer</button>
-            <button onClick={handleApprove} className="council-cta inline-flex items-center gap-2 rounded-sm bg-[hsl(var(--council-gold))] px-4 py-2 text-sm tracking-wider uppercase text-[hsl(var(--council-ink))] hover:brightness-110"><Check className="h-4 w-4" /> Approve & hand off</button>
+            {current.status === "handed_off" ? (
+              <span className="inline-flex items-center gap-2 rounded-sm border border-[hsl(var(--council-gold))]/50 bg-[hsl(var(--council-gold))]/10 px-4 py-2 text-sm tracking-wider uppercase text-[hsl(var(--council-gold))]"><Check className="h-4 w-4" /> Handed Off</span>
+            ) : (
+              <>
+                <button onClick={handleDefer} className="inline-flex items-center gap-2 rounded-sm border border-[hsl(var(--council-line))] px-4 py-2 text-sm tracking-wider uppercase text-[hsl(var(--council-text))] hover:bg-white/5"><X className="h-4 w-4" /> Defer</button>
+                <button onClick={handleApprove} className="council-cta inline-flex items-center gap-2 rounded-sm bg-[hsl(var(--council-gold))] px-4 py-2 text-sm tracking-wider uppercase text-[hsl(var(--council-ink))] hover:brightness-110"><Check className="h-4 w-4" /> Approve & hand off</button>
+              </>
+            )}
           </div>
           <button onClick={() => setIdx((i) => Math.min(i + 1, ranked.length - 1))} className="text-sm text-[hsl(var(--council-text-dim))] hover:text-[hsl(var(--council-text))]">Next <ChevronRight className="inline h-4 w-4" /></button>
         </div>
@@ -722,6 +734,15 @@ function QueueItem({ item, index, overallIdx, showOverall, active, cutLine, onSe
                 >
                   <span className="h-1 w-1 rounded-full bg-[hsl(var(--council-gold))]" />
                   pending
+                </span>
+              )}
+              {item.status === "handed_off" && (
+                <span
+                  className="inline-flex items-center gap-1 rounded-sm border border-green-500/50 bg-green-500/10 px-1 py-px text-[8px] text-green-400"
+                  title="Approved & handed off"
+                >
+                  <Check className="h-2 w-2" />
+                  approved
                 </span>
               )}
               <span className="truncate">{item.sbu} · {item.target_timeline}</span>

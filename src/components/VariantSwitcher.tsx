@@ -3,9 +3,8 @@ import { Activity, Gem } from "lucide-react";
 import { useAppState, type Variant } from "@/lib/appState";
 
 const variants: { id: Variant; name: string; tagline: string; Icon: typeof Activity }[] = [
-  { id: "signal", name: "Signal", tagline: "Live ops console", Icon: Activity },
   { id: "council", name: "Council", tagline: "Decision room", Icon: Gem },
-  // Atlas hidden from switcher (files retained).
+  // Signal and Atlas hidden from switcher (files retained).
 ];
 
 export function VariantSwitcher() {

@@ -57,7 +57,8 @@ export function useAutoScore(items: RequestWithScore[] | undefined, enabled: boo
             confidence: s.confidence,
             rationale: s.rationale,
           }, { onConflict: "request_id" });
-          await supabase.from("requests").update({ status: "scored" }).eq("id", item.id).eq("status", "submitted");
+          const randomDays = Math.floor(Math.random() * 10) + 1; // 1–10 days
+          await supabase.from("requests").update({ status: "scored", target_timeline: "Backlog", estimated_days: randomDays }).eq("id", item.id).eq("status", "submitted");
           await supabase.from("audit_events").insert({ request_id: item.id, event_type: "scored", payload: { total: s.total, confidence: s.confidence } });
           qc.invalidateQueries({ queryKey: REQUESTS_KEY });
         } catch (e) {

@@ -1,19 +1,17 @@
 import { motion } from "framer-motion";
 import { CAPACITY_DAYS_BUDGET, TIMELINES, type RequestWithScore, type Timeline } from "@/lib/domain";
 
-const SEGMENT_STATUSES = ["pending", "in_review", "approved"] as const;
+const SEGMENT_STATUSES = ["approved", "deferred"] as const;
 type SegStatus = (typeof SEGMENT_STATUSES)[number];
 
 const SEG_LABEL: Record<SegStatus, string> = {
-  pending: "Pending",
-  in_review: "In review",
   approved: "Approved",
+  deferred: "Deferred",
 };
 
 const SEG_COLOR: Record<SegStatus, string> = {
-  pending: "hsl(var(--council-text-dim) / 0.35)",
-  in_review: "hsl(var(--council-text-dim))",
   approved: "hsl(var(--council-gold))",
+  deferred: "hsl(var(--council-text-dim) / 0.35)",
 };
 
 const BACKLOG: Timeline = "Backlog";
@@ -22,10 +20,8 @@ const NON_BACKLOG_TIMELINES = TIMELINES.filter((t) => t !== BACKLOG);
 const PER_TIMELINE_BUDGET = Math.round(CAPACITY_DAYS_BUDGET / NON_BACKLOG_TIMELINES.length);
 
 function bucketFor(status: string): SegStatus | null {
-  if (status === "submitted" || status === "scored") return "pending";
-  if (status === "in_review") return "in_review";
-  if (status === "approved") return "approved";
-  // handed_off and deferred are excluded — the widget reflects the open queue only.
+  if (status === "approved" || status === "handed_off") return "approved";
+  if (status === "deferred") return "deferred";
   return null;
 }
 
@@ -39,7 +35,7 @@ export function CouncilCapacity({
   // Build per-timeline + per-status totals. Every non-deferred request counts toward
   // its timeline's bar, segmented by the bucketed status.
   const totals: Record<Timeline, Record<SegStatus, number>> = TIMELINES.reduce((acc, t) => {
-    acc[t] = { pending: 0, in_review: 0, approved: 0 };
+    acc[t] = { approved: 0, deferred: 0 };
     return acc;
   }, {} as Record<Timeline, Record<SegStatus, number>>);
 
@@ -75,7 +71,7 @@ export function CouncilCapacity({
       <div className="space-y-2">
         {TIMELINES.map((t) => {
           const row = totals[t];
-          const used = row.pending + row.in_review + row.approved;
+          const used = row.approved + row.deferred;
           const isBacklog = t === BACKLOG;
           const budget = isBacklog ? null : PER_TIMELINE_BUDGET;
           const over = !isBacklog && used > PER_TIMELINE_BUDGET;
