@@ -6,9 +6,15 @@ import { useEffect, useRef } from "react";
 const REQUESTS_KEY = ["requests"];
 
 async function ensureSeeded() {
-  const { count } = await supabase.from("requests").select("*", { count: "exact", head: true });
-  if ((count ?? 0) >= 5) return;
-  await supabase.functions.invoke("seed-backlog", { body: {} });
+  try {
+    const { count } = await supabase.from("requests").select("*", { count: "exact", head: true });
+    if ((count ?? 0) >= 5) return;
+    // seed-backlog is optional demo data — don't block if it fails
+    const { error } = await supabase.functions.invoke("seed-backlog", { body: {} });
+    if (error) console.warn("seed-backlog skipped:", error.message);
+  } catch {
+    // Edge function may not be deployed — silently ignore
+  }
 }
 
 export function useRequests() {
