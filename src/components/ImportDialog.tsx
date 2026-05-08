@@ -1,12 +1,13 @@
-import { useState } from "react";
-import { Upload, Link as LinkIcon, FileUp, Loader2, X } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Upload, Link as LinkIcon, FileUp, Loader2, X, Database, Eye, KeyRound } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { importRequests } from "@/lib/useRequests";
+import { importRequests, importFromAdo } from "@/lib/useRequests";
 import { supabase } from "@/integrations/supabase/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { CLASSIFICATIONS, SBUS, TIMELINES, WORK_ITEM_TYPES, type Classification, type SBU, type Timeline, type WorkItemType } from "@/lib/domain";
+import { ADO_SOURCES, getSavedPat, savePat, parseAdoQueryUrl, type AdoSource } from "@/lib/ado";
 
 type Draft = {
   title: string;
@@ -28,8 +29,18 @@ export function ImportDialog({ tone = "light" }: { tone?: "light" | "dark" | "co
   const [content, setContent] = useState("");
   const [busy, setBusy] = useState(false);
   const [drafts, setDrafts] = useState<Draft[] | null>(null);
+
+  // ADO preview state
+  const [adoSbu, setAdoSbu] = useState<SBU>("MSS");
+  const [adoPat, setAdoPat] = useState(() => getSavedPat());
+  const [adoCustomUrl, setAdoCustomUrl] = useState("");
+  const [showPat, setShowPat] = useState(false);
+
   const qc = useQueryClient();
   const { toast } = useToast();
+
+  // Save PAT when it changes
+  useEffect(() => { if (adoPat) savePat(adoPat); }, [adoPat]);
 
   const styles =
     tone === "dark"
@@ -65,6 +76,65 @@ export function ImportDialog({ tone = "light" }: { tone?: "light" | "dark" | "co
     }
   };
 
+  // ADO live fetch
+  const runAdoFetch = async () => {
+    if (!adoPat.trim()) {
+      toast({ title: "PAT required", description: "Enter your Azure DevOps Personal Access Token to fetch work items.", variant: "destructive" });
+      return;
+    }
+
+    setBusy(true);
+    try {
+      // Resolve org/project/queryId from pre-configured source or custom URL
+      const source = ADO_SOURCES[adoSbu];
+      let org: string, project: string, queryId: string;
+
+      if (adoCustomUrl.trim()) {
+        const parsed = parseAdoQueryUrl(adoCustomUrl.trim());
+        if (!parsed) {
+          toast({ title: "Invalid URL", description: "Could not parse the ADO query URL. Paste a link like https://dev.azure.com/org/project/_queries/query/{id}", variant: "destructive" });
+          setBusy(false);
+          return;
+        }
+        org = parsed.org;
+        project = parsed.project;
+        queryId = parsed.queryId;
+      } else if (source) {
+        org = source.org;
+        project = source.project;
+        queryId = source.queryId;
+      } else {
+        toast({ title: "No source configured", description: `No ADO query is configured for ${adoSbu} yet. Paste a custom query URL instead.`, variant: "destructive" });
+        setBusy(false);
+        return;
+      }
+
+      const res = await importFromAdo({
+        ado_org: org,
+        ado_project: project,
+        ado_query_id: queryId,
+        ado_pat: adoPat,
+        sbu: adoSbu,
+      });
+
+      if (!res.items?.length) {
+        toast({ title: "No work items found", description: "The ADO query returned 0 results. Check that the query ID is valid and your PAT has read access." });
+      } else {
+        toast({ title: `Fetched ${res.items.length} work items`, description: `From ${org}/${project}` });
+        setDrafts(res.items as Draft[]);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("401") || msg.includes("203")) {
+        toast({ title: "Authentication failed", description: "Your PAT may be expired or lack permissions. Go to dev.azure.com → User Settings → PATs to create a new one with Work Items (Read) scope.", variant: "destructive" });
+      } else {
+        toast({ title: "ADO fetch failed", description: msg, variant: "destructive" });
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const submitAll = async () => {
     if (!drafts) return;
     setBusy(true);
@@ -82,6 +152,9 @@ export function ImportDialog({ tone = "light" }: { tone?: "light" | "dark" | "co
     }
   };
 
+  const configuredSbus = SBUS.filter((s) => s in ADO_SOURCES);
+  const currentSource = ADO_SOURCES[adoSbu];
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
@@ -95,11 +168,109 @@ export function ImportDialog({ tone = "light" }: { tone?: "light" | "dark" | "co
         </DialogHeader>
 
         {!drafts && (
-          <Tabs defaultValue="url">
+          <Tabs defaultValue="ado">
             <TabsList>
-              <TabsTrigger value="url"><LinkIcon className="mr-1.5 h-3.5 w-3.5" /> From Azure DevOps</TabsTrigger>
+              <TabsTrigger value="ado"><Database className="mr-1.5 h-3.5 w-3.5" /> ADO Preview</TabsTrigger>
+              <TabsTrigger value="url"><LinkIcon className="mr-1.5 h-3.5 w-3.5" /> From URL</TabsTrigger>
               <TabsTrigger value="file"><FileUp className="mr-1.5 h-3.5 w-3.5" /> From file</TabsTrigger>
             </TabsList>
+
+            {/* -------- ADO Preview tab (live fetch) -------- */}
+            <TabsContent value="ado" className="space-y-4 pt-3">
+              <div className="rounded-md border bg-muted/40 p-4 space-y-3">
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <Eye className="h-4 w-4 text-blue-500" /> Live ADO Query Preview
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Fetches real work items from Azure DevOps using your PAT. Select an SBU to use its pre-configured query, or paste a custom query URL.
+                </p>
+              </div>
+
+              {/* SBU selector */}
+              <div>
+                <label className="block text-sm font-medium mb-1">SBU source</label>
+                <div className="flex gap-2">
+                  {SBUS.map((s) => {
+                    const configured = s in ADO_SOURCES;
+                    return (
+                      <button
+                        key={s}
+                        onClick={() => { setAdoSbu(s as SBU); setAdoCustomUrl(""); }}
+                        className={`rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
+                          adoSbu === s
+                            ? "border-blue-500 bg-blue-500/10 text-blue-600"
+                            : configured
+                            ? "border-border hover:bg-muted"
+                            : "border-border text-muted-foreground opacity-50"
+                        }`}
+                      >
+                        {s}
+                        {configured && <span className="ml-1 text-green-500">●</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+                {currentSource && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    ✓ Connected: <span className="font-mono">{currentSource.org}/{currentSource.project}</span>
+                  </p>
+                )}
+                {!currentSource && (
+                  <p className="mt-1 text-xs text-amber-600">
+                    ⚠ No query configured for {adoSbu} yet. Paste a custom URL below.
+                  </p>
+                )}
+              </div>
+
+              {/* Custom URL (optional override) */}
+              <div>
+                <label className="block text-sm font-medium mb-1">
+                  Custom query URL <span className="text-muted-foreground font-normal">(optional — overrides SBU default)</span>
+                </label>
+                <input
+                  value={adoCustomUrl}
+                  onChange={(e) => setAdoCustomUrl(e.target.value)}
+                  placeholder="https://dev.azure.com/org/project/_queries/query/{id}"
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                />
+              </div>
+
+              {/* PAT input */}
+              <div>
+                <label className="flex items-center gap-1.5 text-sm font-medium mb-1">
+                  <KeyRound className="h-3.5 w-3.5" /> Personal Access Token (PAT)
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type={showPat ? "text" : "password"}
+                    value={adoPat}
+                    onChange={(e) => setAdoPat(e.target.value)}
+                    placeholder="Paste your ADO PAT here"
+                    className="flex-1 rounded-md border bg-background px-3 py-2 text-sm font-mono"
+                  />
+                  <button
+                    onClick={() => setShowPat(!showPat)}
+                    className="rounded-md border px-3 py-2 text-xs hover:bg-muted"
+                  >
+                    {showPat ? "Hide" : "Show"}
+                  </button>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Needs <strong>Work Items (Read)</strong> scope. Create one at <span className="font-mono">dev.azure.com → User Settings → PATs</span>. Saved locally in your browser only.
+                </p>
+              </div>
+
+              <button
+                onClick={runAdoFetch}
+                disabled={!adoPat || (!currentSource && !adoCustomUrl) || busy}
+                className="inline-flex items-center gap-2 rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-40"
+              >
+                {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {busy ? "Fetching from ADO…" : "Fetch & Preview"}
+              </button>
+            </TabsContent>
+
+            {/* -------- URL tab (AI inference) -------- */}
             <TabsContent value="url" className="space-y-3 pt-3">
               <label className="block text-sm font-medium">ADO work item URL or query link</label>
               <input
@@ -109,7 +280,7 @@ export function ImportDialog({ tone = "light" }: { tone?: "light" | "dark" | "co
                 className="w-full rounded-md border bg-background px-3 py-2 text-sm"
               />
               <p className="text-xs text-muted-foreground">
-                The link is stored as a reference. AI will infer plausible request fields from the URL keywords (no live ADO fetch).
+                AI will infer request fields from the URL keywords. For live ADO data, use the <strong>ADO Preview</strong> tab instead.
               </p>
               <button
                 onClick={() => runImport("url")}
@@ -119,6 +290,8 @@ export function ImportDialog({ tone = "light" }: { tone?: "light" | "dark" | "co
                 {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Extract requests
               </button>
             </TabsContent>
+
+            {/* -------- File tab -------- */}
             <TabsContent value="file" className="space-y-3 pt-3">
               <label className="block text-sm font-medium">Upload .csv, .json, .md, or .txt (≤1MB)</label>
               <input
@@ -139,6 +312,7 @@ export function ImportDialog({ tone = "light" }: { tone?: "light" | "dark" | "co
           </Tabs>
         )}
 
+        {/* -------- Drafts preview (shared by all import methods) -------- */}
         {drafts && (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
@@ -148,11 +322,18 @@ export function ImportDialog({ tone = "light" }: { tone?: "light" | "dark" | "co
             <div className="max-h-[55vh] space-y-3 overflow-y-auto pr-1">
               {drafts.map((d, i) => (
                 <div key={i} className="rounded-md border p-3 space-y-2">
-                  <input
-                    className="w-full rounded border bg-background px-2 py-1 text-sm font-medium"
-                    value={d.title}
-                    onChange={(e) => setDrafts(drafts.map((x, j) => j === i ? { ...x, title: e.target.value } : x))}
-                  />
+                  <div className="flex items-center gap-2">
+                    <input
+                      className="flex-1 rounded border bg-background px-2 py-1 text-sm font-medium"
+                      value={d.title}
+                      onChange={(e) => setDrafts(drafts.map((x, j) => j === i ? { ...x, title: e.target.value } : x))}
+                    />
+                    {d.ado_id && (
+                      <span className="shrink-0 rounded bg-blue-500/10 px-2 py-0.5 text-[10px] font-mono text-blue-600">
+                        {d.ado_id}
+                      </span>
+                    )}
+                  </div>
                   <div className="grid grid-cols-3 gap-2 text-xs">
                     <select value={d.sbu} onChange={(e) => setDrafts(drafts.map((x, j) => j === i ? { ...x, sbu: e.target.value as SBU } : x))} className="rounded border bg-background px-2 py-1">
                       {SBUS.map((s) => <option key={s}>{s}</option>)}
@@ -180,7 +361,7 @@ export function ImportDialog({ tone = "light" }: { tone?: "light" | "dark" | "co
                       value={d.requested_by}
                       onChange={(e) => setDrafts(drafts.map((x, j) => j === i ? { ...x, requested_by: e.target.value } : x))}
                     />
-                    {d.source_ref && <span className="truncate">↗ {d.source_ref}</span>}
+                    {d.source_ref && <span className="truncate max-w-[200px]" title={d.source_ref}>↗ {d.source_ref}</span>}
                   </div>
                 </div>
               ))}

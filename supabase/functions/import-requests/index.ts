@@ -1,10 +1,10 @@
-// Parses an Azure DevOps URL or uploaded file into one or more request drafts.
+// Imports work items from Azure DevOps (live fetch) or from a file (AI extraction).
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const SBUS = ["MSS", "SCIM", "A&I", "TPC"];
+const SBUS = ["MSS", "SCIM", "A&I", "ACT", "TPC"];
 const WORK_ITEM_TYPES = ["Feature", "Bug", "User Story", "Task", "Epic"];
 const CLASSIFICATIONS = [
   "Automation — Enhancement",
@@ -22,6 +22,96 @@ const TIMELINES = [
   "FY27 Semester 2",
   "Backlog",
 ];
+
+const ADO_API_VERSION = "7.1";
+
+// ---------- ADO live-fetch helpers ----------
+
+type AdoField = Record<string, unknown>;
+
+async function fetchAdoQuery(
+  org: string,
+  project: string,
+  queryId: string,
+  pat: string
+): Promise<number[]> {
+  const auth = "Basic " + btoa(":" + pat);
+  const url = `https://dev.azure.com/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/wit/wiql/${queryId}?api-version=${ADO_API_VERSION}`;
+  const res = await fetch(url, { headers: { Authorization: auth } });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`ADO query failed (${res.status}): ${body.slice(0, 300)}`);
+  }
+  const data = await res.json();
+  return (data.workItems ?? []).map((wi: { id: number }) => wi.id);
+}
+
+async function fetchAdoWorkItems(
+  org: string,
+  project: string,
+  ids: number[],
+  pat: string
+): Promise<Array<{ id: number; fields: AdoField; url: string }>> {
+  if (ids.length === 0) return [];
+  const auth = "Basic " + btoa(":" + pat);
+  // ADO allows max 200 IDs per request
+  const chunks: number[][] = [];
+  for (let i = 0; i < ids.length; i += 200) chunks.push(ids.slice(i, i + 200));
+
+  const all: Array<{ id: number; fields: AdoField; url: string }> = [];
+  for (const chunk of chunks) {
+    const url = `https://dev.azure.com/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/wit/workitems?ids=${chunk.join(",")}&$expand=all&api-version=${ADO_API_VERSION}`;
+    const res = await fetch(url, { headers: { Authorization: auth } });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`ADO work items fetch failed (${res.status}): ${body.slice(0, 300)}`);
+    }
+    const data = await res.json();
+    all.push(...(data.value ?? []));
+  }
+  return all;
+}
+
+function mapAdoWorkItemType(adoType: string): string {
+  const lower = adoType.toLowerCase();
+  if (lower.includes("bug")) return "Bug";
+  if (lower.includes("epic")) return "Epic";
+  if (lower.includes("task")) return "Task";
+  if (lower.includes("user story") || lower.includes("story")) return "User Story";
+  return "Feature";
+}
+
+function mapAdoToRequest(
+  wi: { id: number; fields: AdoField; url: string },
+  sbu: string
+) {
+  const f = wi.fields;
+  const title = String(f["System.Title"] ?? `Work Item ${wi.id}`);
+  // Strip HTML tags from description
+  const rawDesc = String(f["System.Description"] ?? "");
+  const description = rawDesc.replace(/<[^>]*>/g, "").trim() || title;
+  const workItemType = mapAdoWorkItemType(String(f["System.WorkItemType"] ?? "Feature"));
+  const assignedTo = f["System.AssignedTo"];
+  const requestedBy =
+    typeof assignedTo === "object" && assignedTo !== null
+      ? String((assignedTo as { displayName?: string }).displayName ?? "")
+      : String(assignedTo ?? "");
+
+  return {
+    title,
+    description,
+    justification: description,
+    sbu,
+    work_item_type: workItemType,
+    classification: "Tooling" as string,
+    target_timeline: "Backlog" as string,
+    requested_by: requestedBy || "imported",
+    source_ref: wi.url,
+    ado_id: `ADO-${wi.id}`,
+  };
+}
+
+// ---------- AI extraction tool (for file/URL fallback) ----------
 
 const tool = {
   type: "function",
@@ -56,12 +146,32 @@ const tool = {
   },
 };
 
+// ---------- Main handler ----------
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   try {
-    const { url, filename, content } = await req.json();
+    const body = await req.json();
+    const { url, filename, content, ado_org, ado_project, ado_query_id, ado_pat, sbu } = body;
+
+    // ---------- Mode 1: Live ADO fetch ----------
+    if (ado_org && ado_project && ado_query_id && ado_pat) {
+      const ids = await fetchAdoQuery(ado_org, ado_project, ado_query_id, ado_pat);
+      if (ids.length === 0) {
+        return new Response(JSON.stringify({ items: [], count: 0 }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      const workItems = await fetchAdoWorkItems(ado_org, ado_project, ids, ado_pat);
+      const items = workItems.map((wi) => mapAdoToRequest(wi, sbu || "MSS"));
+      return new Response(JSON.stringify({ items, count: items.length }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // ---------- Mode 2: AI inference from URL or file ----------
     if (!url && !content) {
-      return new Response(JSON.stringify({ error: "Provide url or content" }), {
+      return new Response(JSON.stringify({ error: "Provide ado_pat + ado_org + ado_project + ado_query_id for live fetch, or url/content for AI extraction." }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -107,7 +217,6 @@ Deno.serve(async (req) => {
       });
     }
     const parsed = JSON.parse(args);
-    // Extract ADO numeric ID from URL if present (e.g. .../_workitems/edit/12345 or ?id=12345)
     const adoMatch = url ? url.match(/(?:edit\/|id=)(\d+)/i) : null;
     const adoFromUrl = adoMatch ? `ADO-${adoMatch[1]}` : null;
     const items = (parsed.items ?? []).map((it: Record<string, unknown>) => ({

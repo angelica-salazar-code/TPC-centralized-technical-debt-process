@@ -142,6 +142,18 @@ export async function importRequests(payload: { url?: string; filename?: string;
   return data as { items: Array<CreateInput & { source_ref: string | null }> };
 }
 
+export async function importFromAdo(payload: {
+  ado_org: string;
+  ado_project: string;
+  ado_query_id: string;
+  ado_pat: string;
+  sbu: string;
+}) {
+  const { data, error } = await supabase.functions.invoke("import-requests", { body: payload });
+  if (error) throw error;
+  return data as { items: Array<CreateInput & { source_ref: string | null; ado_id: string }>; count: number };
+}
+
 export async function buildReport(role: string) {
   const { data, error } = await supabase.functions.invoke("build-report", { body: { role } });
   if (error) throw error;
