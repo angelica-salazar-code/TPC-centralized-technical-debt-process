@@ -2,12 +2,12 @@ import { useState, useEffect } from "react";
 import { Upload, Link as LinkIcon, FileUp, Loader2, X, Database, Eye, KeyRound } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { importRequests, importFromAdo } from "@/lib/useRequests";
+import { importRequests } from "@/lib/useRequests";
 import { supabase } from "@/integrations/supabase/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { CLASSIFICATIONS, SBUS, TIMELINES, WORK_ITEM_TYPES, type Classification, type SBU, type Timeline, type WorkItemType } from "@/lib/domain";
-import { ADO_SOURCES, getSavedPat, savePat, parseAdoQueryUrl, type AdoSource } from "@/lib/ado";
+import { ADO_SOURCES, getSavedPat, savePat, parseAdoQueryUrl, fetchAdoWorkItems } from "@/lib/ado";
 
 type Draft = {
   title: string;
@@ -109,24 +109,20 @@ export function ImportDialog({ tone = "light" }: { tone?: "light" | "dark" | "co
         return;
       }
 
-      const res = await importFromAdo({
-        ado_org: org,
-        ado_project: project,
-        ado_query_id: queryId,
-        ado_pat: adoPat,
-        sbu: adoSbu,
-      });
+      const items = await fetchAdoWorkItems(org, project, queryId, adoPat, adoSbu);
 
-      if (!res.items?.length) {
+      if (!items.length) {
         toast({ title: "No work items found", description: "The ADO query returned 0 results. Check that the query ID is valid and your PAT has read access." });
       } else {
-        toast({ title: `Fetched ${res.items.length} work items`, description: `From ${org}/${project}` });
-        setDrafts(res.items as Draft[]);
+        toast({ title: `Fetched ${items.length} work items`, description: `From ${org}/${project}` });
+        setDrafts(items as Draft[]);
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes("401") || msg.includes("203")) {
+      if (msg === "AUTH_FAILED") {
         toast({ title: "Authentication failed", description: "Your PAT may be expired or lack permissions. Go to dev.azure.com → User Settings → PATs to create a new one with Work Items (Read) scope.", variant: "destructive" });
+      } else if (msg === "QUERY_NOT_FOUND") {
+        toast({ title: "Query not found", description: "The query ID was not found. Temp queries expire — try saving the query in ADO first, then paste the saved query URL.", variant: "destructive" });
       } else {
         toast({ title: "ADO fetch failed", description: msg, variant: "destructive" });
       }

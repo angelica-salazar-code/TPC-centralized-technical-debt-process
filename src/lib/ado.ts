@@ -70,3 +70,107 @@ export function savePat(pat: string) {
 export function clearPat() {
   try { localStorage.removeItem(PAT_STORAGE_KEY); } catch { /* noop */ }
 }
+
+// ---------- Client-side ADO REST API calls ----------
+
+const ADO_API_VERSION = "7.1";
+
+// Execute an ADO saved/temp query → returns work item IDs
+async function fetchAdoQueryIds(org: string, project: string, queryId: string, pat: string): Promise<number[]> {
+  const url = `https://dev.azure.com/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/wit/wiql/${queryId}?api-version=${ADO_API_VERSION}`;
+  const res = await fetch(url, {
+    headers: { Authorization: adoAuthHeader(pat) },
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    if (res.status === 401 || res.status === 203) throw new Error("AUTH_FAILED");
+    if (res.status === 404) throw new Error("QUERY_NOT_FOUND");
+    throw new Error(`ADO query failed (${res.status}): ${body.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  return (data.workItems ?? []).map((wi: { id: number }) => wi.id);
+}
+
+// Fetch full work item details by IDs (max 200 per request)
+async function fetchAdoWorkItemDetails(org: string, project: string, ids: number[], pat: string): Promise<AdoWorkItem[]> {
+  if (ids.length === 0) return [];
+  const all: AdoWorkItem[] = [];
+  for (let i = 0; i < ids.length; i += 200) {
+    const chunk = ids.slice(i, i + 200);
+    const url = `https://dev.azure.com/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/wit/workitems?ids=${chunk.join(",")}&$expand=all&api-version=${ADO_API_VERSION}`;
+    const res = await fetch(url, {
+      headers: { Authorization: adoAuthHeader(pat) },
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`ADO work items fetch failed (${res.status}): ${body.slice(0, 200)}`);
+    }
+    const data = await res.json();
+    all.push(...(data.value ?? []));
+  }
+  return all;
+}
+
+function mapWorkItemType(adoType: string): string {
+  const lower = adoType.toLowerCase();
+  if (lower.includes("bug")) return "Bug";
+  if (lower.includes("epic")) return "Epic";
+  if (lower.includes("task")) return "Task";
+  if (lower.includes("user story") || lower.includes("story")) return "User Story";
+  return "Feature";
+}
+
+function stripHtml(html: string): string {
+  return html.replace(/<[^>]*>/g, "").trim();
+}
+
+export type AdoDraft = {
+  title: string;
+  description: string;
+  justification: string;
+  sbu: string;
+  work_item_type: string;
+  classification: string;
+  target_timeline: string;
+  requested_by: string;
+  source_ref: string | null;
+  ado_id: string;
+};
+
+// Main entry point: fetch work items from ADO and map to draft requests
+export async function fetchAdoWorkItems(
+  org: string,
+  project: string,
+  queryId: string,
+  pat: string,
+  sbu: string
+): Promise<AdoDraft[]> {
+  const ids = await fetchAdoQueryIds(org, project, queryId, pat);
+  if (ids.length === 0) return [];
+
+  const workItems = await fetchAdoWorkItemDetails(org, project, ids, pat);
+  return workItems.map((wi) => {
+    const f = wi.fields;
+    const title = String(f["System.Title"] ?? `Work Item ${wi.id}`);
+    const rawDesc = String(f["System.Description"] ?? "");
+    const description = stripHtml(rawDesc) || title;
+    const assignedTo = f["System.AssignedTo"];
+    const requestedBy =
+      typeof assignedTo === "object" && assignedTo !== null
+        ? String((assignedTo as { displayName?: string }).displayName ?? "")
+        : String(assignedTo ?? "");
+
+    return {
+      title,
+      description,
+      justification: description,
+      sbu,
+      work_item_type: mapWorkItemType(String(f["System.WorkItemType"] ?? "Feature")),
+      classification: "Tooling",
+      target_timeline: "Backlog",
+      requested_by: requestedBy || "imported",
+      source_ref: `https://dev.azure.com/${org}/${project}/_workitems/edit/${wi.id}`,
+      ado_id: `ADO-${wi.id}`,
+    };
+  });
+}
