@@ -13,7 +13,7 @@ export const ADO_SOURCES: Partial<Record<SBU, AdoSource>> = {
   MSS: {
     org: "MSSTAT",
     project: "MSSTAT Feature Planning",
-    queryId: "80d45e77-043c-4e34-beb9-349bd72bc41e",
+    queryId: "16192bfd-6a76-46fc-a027-6c676fe159d8",
     label: "MSS Feature Planning",
   },
   // SCIM, A&I, ACT, TPC — add when their saved queries are ready
