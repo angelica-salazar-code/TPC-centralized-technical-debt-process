@@ -78,9 +78,17 @@ const ADO_API_VERSION = "7.1";
 // Execute an ADO saved/temp query → returns work item IDs
 async function fetchAdoQueryIds(org: string, project: string, queryId: string, pat: string): Promise<number[]> {
   const url = `https://dev.azure.com/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/wit/wiql/${queryId}?api-version=${ADO_API_VERSION}`;
-  const res = await fetch(url, {
-    headers: { Authorization: adoAuthHeader(pat) },
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: { Authorization: adoAuthHeader(pat.trim()) },
+      mode: "cors",
+      credentials: "omit",
+    });
+  } catch (err) {
+    // Network-level failure (DNS, proxy, SSL inspection, etc.)
+    throw new Error(`NETWORK_ERROR: Could not reach dev.azure.com — ${err instanceof Error ? err.message : String(err)}`);
+  }
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     if (res.status === 401 || res.status === 203) throw new Error("AUTH_FAILED");
@@ -98,9 +106,16 @@ async function fetchAdoWorkItemDetails(org: string, project: string, ids: number
   for (let i = 0; i < ids.length; i += 200) {
     const chunk = ids.slice(i, i + 200);
     const url = `https://dev.azure.com/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/wit/workitems?ids=${chunk.join(",")}&$expand=all&api-version=${ADO_API_VERSION}`;
-    const res = await fetch(url, {
-      headers: { Authorization: adoAuthHeader(pat) },
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        headers: { Authorization: adoAuthHeader(pat.trim()) },
+        mode: "cors",
+        credentials: "omit",
+      });
+    } catch (err) {
+      throw new Error(`NETWORK_ERROR: Could not fetch work items — ${err instanceof Error ? err.message : String(err)}`);
+    }
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       throw new Error(`ADO work items fetch failed (${res.status}): ${body.slice(0, 200)}`);

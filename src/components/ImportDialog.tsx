@@ -123,6 +123,8 @@ export function ImportDialog({ tone = "light" }: { tone?: "light" | "dark" | "co
         toast({ title: "Authentication failed", description: "Your PAT may be expired or lack permissions. Go to dev.azure.com → User Settings → PATs to create a new one with Work Items (Read) scope.", variant: "destructive" });
       } else if (msg === "QUERY_NOT_FOUND") {
         toast({ title: "Query not found", description: "The query ID was not found. Temp queries expire — try saving the query in ADO first, then paste the saved query URL.", variant: "destructive" });
+      } else if (msg.startsWith("NETWORK_ERROR")) {
+        toast({ title: "Network error", description: "Could not reach Azure DevOps. This can happen if your corporate network blocks API calls from the browser, or if there's a VPN/proxy issue. Try from a different network.", variant: "destructive" });
       } else {
         toast({ title: "ADO fetch failed", description: msg, variant: "destructive" });
       }
