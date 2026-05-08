@@ -89,10 +89,11 @@ async function fetchAdoQueryIds(org: string, project: string, queryId: string, p
     // Network-level failure (DNS, proxy, SSL inspection, etc.)
     throw new Error(`NETWORK_ERROR: Could not reach dev.azure.com — ${err instanceof Error ? err.message : String(err)}`);
   }
+  // ADO returns 203 + HTML sign-in page when PAT is invalid/missing (203 is "ok" but wrong)
+  if (res.status === 203 || res.status === 401) throw new Error("AUTH_FAILED");
+  if (res.status === 404) throw new Error("QUERY_NOT_FOUND");
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    if (res.status === 401 || res.status === 203) throw new Error("AUTH_FAILED");
-    if (res.status === 404) throw new Error("QUERY_NOT_FOUND");
     throw new Error(`ADO query failed (${res.status}): ${body.slice(0, 200)}`);
   }
   const data = await res.json();
@@ -116,6 +117,7 @@ async function fetchAdoWorkItemDetails(org: string, project: string, ids: number
     } catch (err) {
       throw new Error(`NETWORK_ERROR: Could not fetch work items — ${err instanceof Error ? err.message : String(err)}`);
     }
+    if (res.status === 203 || res.status === 401) throw new Error("AUTH_FAILED");
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       throw new Error(`ADO work items fetch failed (${res.status}): ${body.slice(0, 200)}`);
