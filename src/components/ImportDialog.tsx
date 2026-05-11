@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Upload, Link as LinkIcon, FileUp, Loader2, X, Database, Eye, KeyRound } from "lucide-react";
+import { Upload, Link as LinkIcon, FileUp, Loader2, X, Database, Eye, ShieldCheck } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { importRequests } from "@/lib/useRequests";
@@ -7,7 +7,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { CLASSIFICATIONS, SBUS, TIMELINES, WORK_ITEM_TYPES, type Classification, type SBU, type Timeline, type WorkItemType } from "@/lib/domain";
-import { ADO_SOURCES, getSavedPat, savePat, parseAdoQueryUrl, fetchAdoWorkItems } from "@/lib/ado";
+import { ADO_SOURCES, getSavedToken, saveToken, parseAdoQueryUrl, fetchAdoWorkItems } from "@/lib/ado";
 
 type Draft = {
   title: string;
@@ -32,15 +32,15 @@ export function ImportDialog({ tone = "light" }: { tone?: "light" | "dark" | "co
 
   // ADO preview state
   const [adoSbu, setAdoSbu] = useState<SBU>("MSS");
-  const [adoPat, setAdoPat] = useState(() => getSavedPat());
+  const [adoToken, setAdoToken] = useState(() => getSavedToken());
   const [adoCustomUrl, setAdoCustomUrl] = useState("");
-  const [showPat, setShowPat] = useState(false);
+  const [showToken, setShowToken] = useState(false);
 
   const qc = useQueryClient();
   const { toast } = useToast();
 
-  // Save PAT when it changes
-  useEffect(() => { if (adoPat) savePat(adoPat); }, [adoPat]);
+  // Save token when it changes
+  useEffect(() => { if (adoToken) saveToken(adoToken); }, [adoToken]);
 
   const styles =
     tone === "dark"
@@ -78,8 +78,8 @@ export function ImportDialog({ tone = "light" }: { tone?: "light" | "dark" | "co
 
   // ADO live fetch
   const runAdoFetch = async () => {
-    if (!adoPat.trim()) {
-      toast({ title: "PAT required", description: "Enter your Azure DevOps Personal Access Token to fetch work items.", variant: "destructive" });
+    if (!adoToken.trim()) {
+      toast({ title: "Token required", description: "Paste your Azure CLI token. Run: az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv", variant: "destructive" });
       return;
     }
 
@@ -109,10 +109,10 @@ export function ImportDialog({ tone = "light" }: { tone?: "light" | "dark" | "co
         return;
       }
 
-      const items = await fetchAdoWorkItems(org, project, queryId, adoPat, adoSbu);
+      const items = await fetchAdoWorkItems(org, project, queryId, adoToken, adoSbu);
 
       if (!items.length) {
-        toast({ title: "No work items found", description: "The ADO query returned 0 results. Check that the query ID is valid and your PAT has read access." });
+        toast({ title: "No work items found", description: "The ADO query returned 0 results. Check that the query ID is valid and your token has access." });
       } else {
         toast({ title: `Fetched ${items.length} work items`, description: `From ${org}/${project}` });
         setDrafts(items as Draft[]);
@@ -120,9 +120,9 @@ export function ImportDialog({ tone = "light" }: { tone?: "light" | "dark" | "co
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (msg === "AUTH_FAILED") {
-        toast({ title: "Authentication failed", description: "Your PAT may be expired or lack permissions. Go to dev.azure.com → User Settings → PATs to create a new one with Work Items (Read) scope.", variant: "destructive" });
+        toast({ title: "Authentication failed", description: "Your token may be expired. Run this command again to get a fresh one:\naz account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv", variant: "destructive" });
       } else if (msg === "QUERY_NOT_FOUND") {
-        toast({ title: "Query not found", description: "The query ID was not found. Temp queries expire — try saving the query in ADO first, then paste the saved query URL.", variant: "destructive" });
+        toast({ title: "Query not found", description: "The query ID was not found. Make sure the query is saved in ADO and the URL is correct.", variant: "destructive" });
       } else if (msg.startsWith("NETWORK_ERROR")) {
         toast({ title: "Network error", description: "Could not reach Azure DevOps. This can happen if your corporate network blocks API calls from the browser, or if there's a VPN/proxy issue. Try from a different network.", variant: "destructive" });
       } else {
@@ -180,7 +180,7 @@ export function ImportDialog({ tone = "light" }: { tone?: "light" | "dark" | "co
                   <Eye className="h-4 w-4 text-blue-500" /> Live ADO Query Preview
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Fetches real work items from Azure DevOps using your PAT. Select an SBU to use its pre-configured query, or paste a custom query URL.
+                  Fetches real work items from Azure DevOps using your Microsoft Entra token. Select an SBU to use its pre-configured query, or paste a custom query URL.
                 </p>
               </div>
 
@@ -233,34 +233,42 @@ export function ImportDialog({ tone = "light" }: { tone?: "light" | "dark" | "co
                 />
               </div>
 
-              {/* PAT input */}
+              {/* Azure CLI Token input */}
               <div>
                 <label className="flex items-center gap-1.5 text-sm font-medium mb-1">
-                  <KeyRound className="h-3.5 w-3.5" /> Personal Access Token (PAT)
+                  <ShieldCheck className="h-3.5 w-3.5" /> Microsoft Entra Token
                 </label>
                 <div className="flex gap-2">
                   <input
-                    type={showPat ? "text" : "password"}
-                    value={adoPat}
-                    onChange={(e) => setAdoPat(e.target.value)}
-                    placeholder="Paste your ADO PAT here"
+                    type={showToken ? "text" : "password"}
+                    value={adoToken}
+                    onChange={(e) => setAdoToken(e.target.value)}
+                    placeholder="Paste your Azure CLI access token here"
                     className="flex-1 rounded-md border bg-background px-3 py-2 text-sm font-mono"
                   />
                   <button
-                    onClick={() => setShowPat(!showPat)}
+                    onClick={() => setShowToken(!showToken)}
                     className="rounded-md border px-3 py-2 text-xs hover:bg-muted"
                   >
-                    {showPat ? "Hide" : "Show"}
+                    {showToken ? "Hide" : "Show"}
                   </button>
                 </div>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Needs <strong>Work Items (Read)</strong> scope. Create one at <span className="font-mono">dev.azure.com → User Settings → PATs</span>. Saved locally in your browser only.
-                </p>
+                <div className="mt-1.5 rounded-md border border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/30 p-2">
+                  <p className="text-xs text-blue-700 dark:text-blue-300">
+                    Run this in your terminal to get a token:
+                  </p>
+                  <code className="mt-1 block text-[11px] font-mono text-blue-800 dark:text-blue-200 bg-blue-100 dark:bg-blue-900/50 rounded px-2 py-1 select-all">
+                    az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv
+                  </code>
+                  <p className="mt-1 text-[10px] text-blue-600 dark:text-blue-400">
+                    Token expires after ~1 hour. Saved locally in your browser only.
+                  </p>
+                </div>
               </div>
 
               <button
                 onClick={runAdoFetch}
-                disabled={!adoPat || (!currentSource && !adoCustomUrl) || busy}
+                disabled={!adoToken || (!currentSource && !adoCustomUrl) || busy}
                 className="inline-flex items-center gap-2 rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-40"
               >
                 {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}

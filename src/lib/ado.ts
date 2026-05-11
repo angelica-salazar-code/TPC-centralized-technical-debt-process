@@ -52,23 +52,23 @@ export type AdoWorkItem = {
   url: string;
 };
 
-// Build the Basic auth header from a PAT
-export function adoAuthHeader(pat: string): string {
-  return "Basic " + btoa(":" + pat);
+// Build the Bearer auth header from an Azure CLI / Entra token
+export function adoAuthHeader(token: string): string {
+  return "Bearer " + token.trim();
 }
 
-const PAT_STORAGE_KEY = "ado_pat";
+const TOKEN_STORAGE_KEY = "ado_entra_token";
 
-export function getSavedPat(): string {
-  try { return localStorage.getItem(PAT_STORAGE_KEY) ?? ""; } catch { return ""; }
+export function getSavedToken(): string {
+  try { return localStorage.getItem(TOKEN_STORAGE_KEY) ?? ""; } catch { return ""; }
 }
 
-export function savePat(pat: string) {
-  try { localStorage.setItem(PAT_STORAGE_KEY, pat); } catch { /* noop */ }
+export function saveToken(token: string) {
+  try { localStorage.setItem(TOKEN_STORAGE_KEY, token); } catch { /* noop */ }
 }
 
-export function clearPat() {
-  try { localStorage.removeItem(PAT_STORAGE_KEY); } catch { /* noop */ }
+export function clearToken() {
+  try { localStorage.removeItem(TOKEN_STORAGE_KEY); } catch { /* noop */ }
 }
 
 // ---------- Client-side ADO REST API calls ----------
@@ -76,20 +76,19 @@ export function clearPat() {
 const ADO_API_VERSION = "7.1";
 
 // Execute an ADO saved/temp query → returns work item IDs
-async function fetchAdoQueryIds(org: string, project: string, queryId: string, pat: string): Promise<number[]> {
+async function fetchAdoQueryIds(org: string, project: string, queryId: string, token: string): Promise<number[]> {
   const url = `https://dev.azure.com/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/wit/wiql/${queryId}?api-version=${ADO_API_VERSION}`;
   let res: Response;
   try {
     res = await fetch(url, {
-      headers: { Authorization: adoAuthHeader(pat.trim()) },
+      headers: { Authorization: adoAuthHeader(token) },
       mode: "cors",
       credentials: "omit",
     });
   } catch (err) {
-    // Network-level failure (DNS, proxy, SSL inspection, etc.)
     throw new Error(`NETWORK_ERROR: Could not reach dev.azure.com — ${err instanceof Error ? err.message : String(err)}`);
   }
-  // ADO returns 203 + HTML sign-in page when PAT is invalid/missing (203 is "ok" but wrong)
+  // ADO returns 203 + HTML sign-in page when token is invalid/expired
   if (res.status === 203 || res.status === 401) throw new Error("AUTH_FAILED");
   if (res.status === 404) throw new Error("QUERY_NOT_FOUND");
   if (!res.ok) {
@@ -101,7 +100,7 @@ async function fetchAdoQueryIds(org: string, project: string, queryId: string, p
 }
 
 // Fetch full work item details by IDs (max 200 per request)
-async function fetchAdoWorkItemDetails(org: string, project: string, ids: number[], pat: string): Promise<AdoWorkItem[]> {
+async function fetchAdoWorkItemDetails(org: string, project: string, ids: number[], token: string): Promise<AdoWorkItem[]> {
   if (ids.length === 0) return [];
   const all: AdoWorkItem[] = [];
   for (let i = 0; i < ids.length; i += 200) {
@@ -110,7 +109,7 @@ async function fetchAdoWorkItemDetails(org: string, project: string, ids: number
     let res: Response;
     try {
       res = await fetch(url, {
-        headers: { Authorization: adoAuthHeader(pat.trim()) },
+        headers: { Authorization: adoAuthHeader(token) },
         mode: "cors",
         credentials: "omit",
       });
@@ -159,13 +158,13 @@ export async function fetchAdoWorkItems(
   org: string,
   project: string,
   queryId: string,
-  pat: string,
+  token: string,
   sbu: string
 ): Promise<AdoDraft[]> {
-  const ids = await fetchAdoQueryIds(org, project, queryId, pat);
+  const ids = await fetchAdoQueryIds(org, project, queryId, token);
   if (ids.length === 0) return [];
 
-  const workItems = await fetchAdoWorkItemDetails(org, project, ids, pat);
+  const workItems = await fetchAdoWorkItemDetails(org, project, ids, token);
   return workItems.map((wi) => {
     const f = wi.fields;
     const title = String(f["System.Title"] ?? `Work Item ${wi.id}`);
